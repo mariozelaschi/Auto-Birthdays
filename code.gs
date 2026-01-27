@@ -333,6 +333,7 @@ function generateLocalizedDescription(contactName) {
 /**
  * Build a quick‑lookup map keying events by “title|month|day”.
  * Significantly reduces runtime from O(contacts × events) to O(contacts + events).
+ * Returns arrays of events to handle duplicate keys (e.g., recurring event instances).
  */
 function buildBirthdayIndex(events) {
   const map = new Map();
@@ -340,7 +341,10 @@ function buildBirthdayIndex(events) {
     if (!ev.isAllDayEvent()) continue;
     const d   = ev.getStartTime();
     const key = `${ev.getTitle()}|${d.getMonth()}|${d.getDate()}`;
-    map.set(key, ev);
+    if (!map.has(key)) {
+      map.set(key, []);
+    }
+    map.get(key).push(ev);
   }
   return map;
 }
@@ -376,26 +380,6 @@ function hasRequiredLabel(person, labelIds) {
   }
 
   return false;
-}
-
-/**
- * Check if a contact's birthday month matches any of the specified filter months.
- * @param {object} person - The contact person object
- * @param {number[]} filterMonths - Array of months to include (1-12)
- * @returns {boolean} - True if contact's birthday month matches any filter month
- */
-function hasMatchingBirthMonth(person, filterMonths) {
-  if (!filterMonths || filterMonths.length === 0) {
-    return true; // No month filter specified, so all contacts match
-  }
-
-  const birthdayData = person.birthdays?.find(b => b.date);
-  if (!birthdayData || !birthdayData.date || typeof birthdayData.date.month !== 'number') {
-    return false; // No valid birthday data
-  }
-
-  const birthMonth = birthdayData.date.month;
-  return filterMonths.includes(birthMonth);
 }
 
 /**
@@ -465,7 +449,8 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
 
   // FAST existence check
   const key = `${expectedTitle}|${month}|${day}`;
-  const existingQuick = eventIndex.get(key);
+  const existingEvents = eventIndex.get(key) || [];
+  const existingQuick = existingEvents[0]; // Get first matching event
   
   // For individual age events, we need to check differently
   const usingIndividualEvents = CONFIG.useRecurrence && CONFIG.showAgeOnRecurring && birthdayDate.year;
@@ -525,7 +510,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
           const series = event.getEventSeries();
           const seriesId = series.getId();
           if (deletedSeriesIds.has(seriesId)) {
-            break;
+            continue;
           }
           deletedSeriesIds.add(seriesId);
           series.deleteEventSeries();
@@ -562,7 +547,8 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       );
       
       const yearKey = `${yearTitle}|${month}|${day}`;
-      const yearEvent = eventIndex.get(yearKey);
+      const yearEvents = eventIndex.get(yearKey) || [];
+      const yearEvent = yearEvents[0]; // Get first matching event
       if (!yearEvent || !isEventCreatedByScript(yearEvent) || (yearEvent.getDescription() || '') !== expectedDescription || !hasCorrectReminders(yearEvent)) {
         allYearsExist = false;
         break;
@@ -595,6 +581,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
         yearBirthdayDate,
         { description: expectedDescription }
       );
+      event.removeAllReminders();
       if (CONFIG.useReminders) {
         event.addPopupReminder(CONFIG.reminderMinutesBefore);
       }
@@ -612,6 +599,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       recurrence,
       { description: expectedDescription }
     );
+    eventSeries.removeAllReminders();
     if (CONFIG.useReminders) {
       eventSeries.addPopupReminder(CONFIG.reminderMinutesBefore);
     }
@@ -623,6 +611,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       birthdayDateThisYear,
       { description: expectedDescription }
     );
+    event.removeAllReminders();
     if (CONFIG.useReminders) {
       event.addPopupReminder(CONFIG.reminderMinutesBefore);
     }
@@ -872,19 +861,22 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
   Logger.log(`🗑️ Starting deletion of ${eventsToDelete.length} marked events (${deletedSeriesIds.size} recurring series, ${eventsToDelete.length - deletedSeriesIds.size} single events)`);
   
   for (const { event, isSeries } of eventsToDelete) {
+    // Store event info before deletion to avoid accessing deleted event
+    const eventTitle = event.getTitle();
+    const eventDate = isSeries ? null : event.getStartTime();
     try {
       if (isSeries) {
         event.deleteEventSeries(); // Deletes the entire series
         recurringSeriesDeleted++;
-        Logger.log(`🧹 Deleted recurring series → ${event.getTitle()}`);
+        Logger.log(`🧹 Deleted recurring series → ${eventTitle}`);
       } else {
         event.deleteEvent();
         singleEventsDeleted++;
-        Logger.log(`🧹 Deleted single event → ${event.getTitle()} on ${event.getStartTime().toDateString()}`);
+        Logger.log(`🧹 Deleted single event → ${eventTitle} on ${eventDate.toDateString()}`);
       }
     } catch (e) {
       deleteFailures++;
-      Logger.log(`❌ Failed to delete event → ${event.getTitle()} | Reason: ${e}`);
+      Logger.log(`❌ Failed to delete event → ${eventTitle} | Reason: ${e}`);
     }
   }
 
@@ -913,17 +905,39 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
 
 /**
  * Ensure a correct time-based trigger exists for loopThroughContacts.
- * Removes old one and creates a new one according to CONFIG.
+ * Uses PropertiesService to track current trigger configuration and only
+ * recreates the trigger when the configuration actually changes.
  */
 function ensureTriggerExists() {
+  const props = PropertiesService.getScriptProperties();
+  const currentConfig = JSON.stringify({
+    frequency: CONFIG.triggerFrequency,
+    hour: CONFIG.triggerHour
+  });
+  const savedConfig = props.getProperty('triggerConfig');
+  
+  // Check if a trigger already exists
   const triggers = ScriptApp.getProjectTriggers();
+  let existingTrigger = null;
   for (const trigger of triggers) {
     if (trigger.getHandlerFunction() === 'loopThroughContacts') {
-      ScriptApp.deleteTrigger(trigger);
-      Logger.log("🗑️ Removed outdated trigger for loopThroughContacts");
+      existingTrigger = trigger;
+      break;
     }
   }
-
+  
+  // If trigger exists and config hasn't changed, do nothing
+  if (existingTrigger && savedConfig === currentConfig) {
+    Logger.log("✅ Trigger already exists with correct configuration");
+    return;
+  }
+  
+  // Config changed or no trigger exists - recreate
+  if (existingTrigger) {
+    ScriptApp.deleteTrigger(existingTrigger);
+    Logger.log("🗑️ Removed trigger with outdated configuration");
+  }
+  
   const builder = ScriptApp.newTrigger('loopThroughContacts').timeBased();
   if (CONFIG.triggerFrequency === 'hourly') {
     builder.everyHours(1);
@@ -932,8 +946,10 @@ function ensureTriggerExists() {
     builder.everyDays(1).atHour(CONFIG.triggerHour);
     Logger.log(`✅ Created daily trigger at ${CONFIG.triggerHour}:00`);
   }
-
   builder.create();
+  
+  // Save the current configuration
+  props.setProperty('triggerConfig', currentConfig);
 }
 
 /**
