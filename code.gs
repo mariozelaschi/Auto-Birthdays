@@ -11,8 +11,8 @@ const CONFIG = {
   showAgeOnRecurring: false,         // If true, shows (age) on recurring events instead of (*YYYY)
   
   // Event appearance
-  eventColor: '2',                   // Event color (1-11): 1=Lavender, 2=Sage, 3=Grape, 4=Flamingo, 5=Banana,
-                                     // 6=Tangerine, 7=Peacock, 8=Graphite, 9=Blueberry, 10=Basil, 11=Tomato
+  eventColor: '2',                   // Event color: '1'=Lavender, '2'=Sage, '3'=Grape, '4'=Flamingo, '5'=Banana,
+                                     // '6'=Tangerine, '7'=Peacock, '8'=Graphite, '9'=Blueberry, '10'=Basil, '11'=Tomato
                                      // Set to '' or null to use calendar default color
   
   // Language and localization

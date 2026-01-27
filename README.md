@@ -40,6 +40,9 @@ const CONFIG = {
   showYearOrAge: true,               // Recurrence on: shows (*YYYY), off: shows (age)
   showAgeOnRecurring: false,         // If true, shows (age) on recurring events instead of (*YYYY)
   
+  // Event appearance
+  eventColor: '4',                   // Event color (see color chart below)
+  
   // Language and localization
   language: 'en',                    // Language code: 'en' (English), 'it' (Italian), etc.
   titleFormat: '',                   // Custom title format (empty = use language default)
@@ -56,6 +59,7 @@ const CONFIG = {
 
   // Cleanup
   firstRunCleanup: false,            // ⚠️ ONE-TIME: Set true to remove old "xxx's Birthday" events
+  manualCleanup: false,              // ⚠️ ONE-TIME: Set true to delete ALL script-created events
   monthlyCleanup: true,              // Run full cleanup on the 1st of each month (deletes & recreates)
   cleanupOrphans: true,              // Delete birthday events for contacts that no longer exist
 
@@ -76,6 +80,36 @@ const CONFIG = {
   filterMonths: []                   // Array of months to include (1-12)
 };
 ```
+
+### Event Color Options
+
+Customize the color of birthday events in your calendar. Google Calendar supports the following event colors:
+
+| Color Code | Color Name | Description | Hex Color |
+|------------|------------|-------------|----------|
+| `'1'` | Lavender | Pale purple | #a4bdfc |
+| `'2'` | Sage | Light green | #7ae7bf |
+| `'3'` | Grape | Purple | #dbadff |
+| `'4'` | Flamingo | Pink | #ff887c |
+| `'5'` | Banana | Yellow | #fbd75b |
+| `'6'` | Tangerine | Orange | #ffb878 |
+| `'7'` | Peacock | Teal/Cyan | #46d6db |
+| `'8'` | Graphite | Gray | #e1e1e1 |
+| `'9'` | Blueberry | Blue | #5484ed |
+| `'10'` | Basil | Green | #51b749 |
+| `'11'` | Tomato | Red | #dc2127 |
+| `''` or `null` | Default | Calendar's default color | - |
+
+**Popular choices for birthdays:**
+```javascript
+eventColor: '4',     // 🤩 Flamingo (pink) - festive and cheerful
+eventColor: '5',     // 🎉 Banana (yellow) - bright and celebratory  
+eventColor: '11',    // 🎂 Tomato (red) - bold and noticeable
+eventColor: '9',     // 💙 Blueberry (blue) - calm and classic
+eventColor: '',      // Use your calendar's default color
+```
+
+**Note:** To apply color changes to existing events, set `manualCleanup: true`, run the script once to delete old events, then set it back to `false` and run again to recreate them with the new color.
 
 ---
 
