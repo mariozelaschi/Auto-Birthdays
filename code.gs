@@ -162,6 +162,12 @@ function loopThroughContacts() {
   let skippedInvalidBirthdays = 0;
 
   for (const person of connections) {
+    // First check if contact has valid birthday data
+    const birthdayData = person.birthdays?.find(b => b.date);
+    if (!birthdayData) {
+      continue; // No birthday data - will be counted as "without birthday" at the end
+    }
+
     // Check if label filtering is enabled and if this contact has the required labels
     if (CONFIG.useLabels && !hasRequiredLabel(person, CONFIG.contactLabels)) {
       skippedByLabelFilter++;
@@ -169,33 +175,33 @@ function loopThroughContacts() {
     }
 
     // Check if month filtering is enabled and if this contact's birthday month matches
-    if (CONFIG.useMonthFilter && !hasMatchingBirthMonth(person, CONFIG.filterMonths)) {
-      skippedByMonthFilter++;
-      continue; // Skip this contact if its birthday month doesn't match the filter
+    if (CONFIG.useMonthFilter && CONFIG.filterMonths.length > 0) {
+      const birthMonth = birthdayData.date.month;
+      if (!CONFIG.filterMonths.includes(birthMonth)) {
+        skippedByMonthFilter++;
+        continue; // Skip this contact if its birthday month doesn't match the filter
+      }
     }
 
-    const birthdayData = person.birthdays?.find(b => b.date);
-    if (birthdayData) {
-      contactsWithBirthdays++;
-      try {
-        const result = updateOrCreateBirthDayEvent(person, birthdayData, calendar, allEvents, eventIndex);
-        if (result === 'created') {
-          processedContacts++;
-          eventsCreated++;
-        } else if (result === 'updated') {
-          processedContacts++;
-          eventsUpdated++;
-        } else if (result === 'skipped_existing') {
-          processedContacts++;
-          // Event already exists and is correct - no action needed
-        } else if (result === 'skipped_invalid') {
-          skippedInvalidBirthdays++;
-        }
-      } catch (error) {
-        const contactName = getContactName(person);
-        Logger.log(`❌ Error processing ${contactName}: ${error}`);
+    contactsWithBirthdays++;
+    try {
+      const result = updateOrCreateBirthDayEvent(person, birthdayData, calendar, allEvents, eventIndex);
+      if (result === 'created') {
+        processedContacts++;
+        eventsCreated++;
+      } else if (result === 'updated') {
+        processedContacts++;
+        eventsUpdated++;
+      } else if (result === 'skipped_existing') {
+        processedContacts++;
+        // Event already exists and is correct - no action needed
+      } else if (result === 'skipped_invalid') {
         skippedInvalidBirthdays++;
       }
+    } catch (error) {
+      const contactName = getContactName(person);
+      Logger.log(`❌ Error processing ${contactName}: ${error}`);
+      skippedInvalidBirthdays++;
     }
   }
 
@@ -672,21 +678,6 @@ function findBirthdayEvents(allEvents, contactName, month, day) {
     return ev.isAllDayEvent() &&
            (title.includes(contactName) && (d.getMonth() === month && d.getDate() === day));
   });
-}
-
-/**
- * Get upcoming birthday (this year or next).
- */
-function calculateNextBirthday(birthdayDate) {
-  const day = birthdayDate.day;
-  const month = birthdayDate.month - 1;
-  const today = new Date();
-  let year = today.getFullYear();
-  const birthdayThisYear = new Date(year, month, day);
-  if (today >= birthdayThisYear) {
-    year++;
-  }
-  return new Date(year, month, day);
 }
 
 /**
