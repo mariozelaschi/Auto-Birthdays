@@ -3,7 +3,7 @@
  * Version: 1.0
  ******************************/
 const CONFIG = {
-  calendarId: 'primary',            // 'primary' or your calendar ID
+  calendarId: 'addressbook#contacts@group.v.calendar.google.com',  // Special Birthdays calendar
 
   // Title customization
   useEmoji: true,                    // Add 🎂 emoji to event titles
