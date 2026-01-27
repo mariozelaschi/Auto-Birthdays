@@ -3,12 +3,17 @@
  * Version: 1.0
  ******************************/
 const CONFIG = {
-  calendarId: 'addressbook#contacts@group.v.calendar.google.com',  // Special Birthdays calendar
+  calendarId: 'primary',  // Use 'primary' or create a custom calendar and paste its ID here
 
   // Title customization
   useEmoji: true,                    // Add 🎂 emoji to event titles
   showYearOrAge: true,               // Recurrence on: shows (*YYYY), off: shows (age)
   showAgeOnRecurring: false,         // If true, shows (age) on recurring events instead of (*YYYY)
+  
+  // Event appearance
+  eventColor: '2',                   // Event color (1-11): 1=Lavender, 2=Sage, 3=Grape, 4=Flamingo, 5=Banana,
+                                     // 6=Tangerine, 7=Peacock, 8=Graphite, 9=Blueberry, 10=Basil, 11=Tomato
+                                     // Set to '' or null to use calendar default color
   
   // Language and localization
   language: 'en',                    // Language code: 'en' (English), 'it' (Italian), 'fr' (French), 'de' (German), 'es' (Spanish)
@@ -26,6 +31,7 @@ const CONFIG = {
 
   // Cleanup
   firstRunCleanup: false,            // ⚠️ ONE-TIME: Set true to remove old "xxx's Birthday" events, then set back to false
+  manualCleanup: false,              // ⚠️ ONE-TIME: Set true to delete ALL events created by this script, then set back to false
   monthlyCleanup: true,              // Run full cleanup on the 1st of each month (deletes & recreates all events)
   cleanupOrphans: true,              // Automatically delete birthday events for contacts that no longer exist
 
@@ -144,6 +150,15 @@ function loopThroughContacts() {
     cleanupLegacyBirthdayEvents(calendar);
     Logger.log("🎉 First-run cleanup completed!");
     Logger.log("⚠️ Remember to set firstRunCleanup back to false!");
+    return;
+  }
+
+  // Manual cleanup: delete ALL events created by this script
+  if (CONFIG.manualCleanup) {
+    Logger.log("🧹 Running manual cleanup of ALL script-created events...");
+    cleanupAllScriptEvents(calendar);
+    Logger.log("🎉 Manual cleanup completed!");
+    Logger.log("⚠️ Remember to set manualCleanup back to false!");
     return;
   }
 
@@ -600,6 +615,9 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       if (CONFIG.useReminders) {
         event.addPopupReminder(CONFIG.reminderMinutesBefore);
       }
+      if (CONFIG.eventColor) {
+        event.setColor(CONFIG.eventColor);
+      }
       Logger.log(`🎁 Created individual event: ${yearTitle} [${yearBirthdayDate.toDateString()}]`);
     }
   } else if (CONFIG.useRecurrence) {
@@ -618,6 +636,9 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
     if (CONFIG.useReminders) {
       eventSeries.addPopupReminder(CONFIG.reminderMinutesBefore);
     }
+    if (CONFIG.eventColor) {
+      eventSeries.setColor(CONFIG.eventColor);
+    }
     Logger.log(`🎉 Created RECURRING event: ${expectedTitle} [starts ${birthdayStartDate.toDateString()}]`);
   } else {
     // Create single event for this year
@@ -629,6 +650,9 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
     event.removeAllReminders();
     if (CONFIG.useReminders) {
       event.addPopupReminder(CONFIG.reminderMinutesBefore);
+    }
+    if (CONFIG.eventColor) {
+      event.setColor(CONFIG.eventColor);
     }
     Logger.log(`🎁 Created ONE-TIME event: ${expectedTitle} [${birthdayDateThisYear.toDateString()}]`);
   }
@@ -1046,4 +1070,59 @@ function cleanupLegacyBirthdayEvents(calendar) {
   Logger.log(`📅 Single events deleted: ${legacyEventsDeleted}`);
   Logger.log(`🔄 Recurring series deleted: ${seriesDeleted}`);
   Logger.log(`✅ Total deletions: ${legacyEventsDeleted + seriesDeleted}`);
+}
+
+/**
+ * Manual cleanup: Delete ALL events created by this script.
+ * Identifies events by the scriptKey in the description.
+ * Use this to completely reset and start fresh.
+ */
+function cleanupAllScriptEvents(calendar) {
+  const currentYear = new Date().getFullYear();
+  const startDate = new Date(currentYear - 100, 0, 1);
+  const endDate = new Date(currentYear + 100, 11, 31);
+  const allEvents = calendar.getEvents(startDate, endDate);
+  
+  Logger.log(`🔍 Scanning ${allEvents.length} events for script-created birthday events...`);
+  Logger.log(`🔑 Looking for events with tag: [${CONFIG.scriptKey}]`);
+  
+  const deletedSeriesIds = new Set();
+  let singleEventsDeleted = 0;
+  let seriesDeleted = 0;
+  let failures = 0;
+  
+  for (const event of allEvents) {
+    // Only delete events created by this script
+    if (!isEventCreatedByScript(event)) continue;
+    
+    const title = event.getTitle();
+    
+    try {
+      if (event.isRecurringEvent && event.isRecurringEvent()) {
+        const series = event.getEventSeries();
+        const seriesId = series.getId();
+        if (!deletedSeriesIds.has(seriesId)) {
+          deletedSeriesIds.add(seriesId);
+          series.deleteEventSeries();
+          seriesDeleted++;
+          Logger.log(`🗑️ Deleted recurring series: ${title}`);
+        }
+      } else {
+        event.deleteEvent();
+        singleEventsDeleted++;
+        Logger.log(`🗑️ Deleted event: ${title} [${event.getStartTime().toDateString()}]`);
+      }
+    } catch (e) {
+      failures++;
+      Logger.log(`❌ Failed to delete: ${title} - ${e}`);
+    }
+  }
+  
+  Logger.log("📊 MANUAL CLEANUP SUMMARY:");
+  Logger.log(`📅 Single events deleted: ${singleEventsDeleted}`);
+  Logger.log(`🔄 Recurring series deleted: ${seriesDeleted}`);
+  Logger.log(`✅ Total deletions: ${singleEventsDeleted + seriesDeleted}`);
+  if (failures > 0) {
+    Logger.log(`❌ Failed deletions: ${failures}`);
+  }
 }
