@@ -26,6 +26,7 @@ const CONFIG = {
 
   // Cleanup
   cleanupEvents: false,              // ⚠️⚠️⚠️ Deletes all matching birthday events between ±100 years
+  cleanupOrphans: true,              // Automatically delete birthday events for contacts that no longer exist
 
   // Trigger options
   useTrigger: true,                  // Automatically run on a schedule
@@ -244,6 +245,14 @@ function loopThroughContacts() {
     Logger.log(`⏰ Reminders enabled: ${reminderText}`);
   } else {
     Logger.log(`⏰ Reminders disabled`);
+  }
+  
+  // Clean up orphaned events (from deleted contacts)
+  if (CONFIG.cleanupOrphans) {
+    const orphansDeleted = cleanupOrphanedEvents(calendar, allEvents, connections);
+    if (orphansDeleted > 0) {
+      Logger.log(`🧹 Orphaned events deleted: ${orphansDeleted}`);
+    }
   }
   
   Logger.log("🎉 Processing completed successfully!");
@@ -678,6 +687,69 @@ function findBirthdayEvents(allEvents, contactName, month, day) {
     return ev.isAllDayEvent() &&
            (title.includes(contactName) && (d.getMonth() === month && d.getDate() === day));
   });
+}
+
+/**
+ * Clean up orphaned birthday events - events created by this script
+ * that no longer match any existing contact.
+ * @param {Calendar} calendar - The calendar to clean
+ * @param {CalendarEvent[]} allEvents - All events in the date range
+ * @param {object[]} allContacts - All contacts from Google Contacts
+ * @returns {number} - Number of orphaned events deleted
+ */
+function cleanupOrphanedEvents(calendar, allEvents, allContacts) {
+  // Build a set of all contact names for fast lookup
+  const contactNames = new Set();
+  for (const person of allContacts) {
+    const name = getContactName(person);
+    if (name && name !== "Unknown") {
+      contactNames.add(name);
+    }
+  }
+
+  const deletedSeriesIds = new Set();
+  let orphansDeleted = 0;
+
+  for (const event of allEvents) {
+    // Only check events created by this script
+    if (!isEventCreatedByScript(event)) continue;
+    if (!event.isAllDayEvent()) continue;
+
+    const title = event.getTitle();
+    
+    // Check if any contact name is found in the event title
+    let hasMatchingContact = false;
+    for (const name of contactNames) {
+      if (title.includes(name)) {
+        hasMatchingContact = true;
+        break;
+      }
+    }
+
+    // If no matching contact found, this is an orphaned event
+    if (!hasMatchingContact) {
+      try {
+        if (event.isRecurringEvent && event.isRecurringEvent()) {
+          const series = event.getEventSeries();
+          const seriesId = series.getId();
+          if (!deletedSeriesIds.has(seriesId)) {
+            deletedSeriesIds.add(seriesId);
+            series.deleteEventSeries();
+            orphansDeleted++;
+            Logger.log(`🧹 Deleted orphaned recurring series: ${title}`);
+          }
+        } else {
+          event.deleteEvent();
+          orphansDeleted++;
+          Logger.log(`🧹 Deleted orphaned event: ${title}`);
+        }
+      } catch (e) {
+        Logger.log(`❌ Failed to delete orphaned event: ${title} - ${e}`);
+      }
+    }
+  }
+
+  return orphansDeleted;
 }
 
 /**
