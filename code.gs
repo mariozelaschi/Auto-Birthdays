@@ -20,12 +20,12 @@ const CONFIG = {
   pastYears: 1,                      // Recurring events start this many years in the past
 
   // Reminder settings
-  useReminders: true,                // Enable/disable reminders for birthday events
+  useReminders: false,               // Enable/disable reminders for birthday events
   reminderMinutesBefore: 1440,       // Popup reminder time (in minutes) - only used if useReminders is true
                                      // Common values: 0 = at event time, 60 = 1 hour before, 1440 = 1 day before, 10080 = 1 week before
 
   // Cleanup
-  cleanupEvents: false,              // ⚠️⚠️⚠️ Deletes all matching birthday events between ±100 years
+  monthlyCleanup: true,              // Run full cleanup on the 1st of each month (deletes & recreates all events)
   cleanupOrphans: true,              // Automatically delete birthday events for contacts that no longer exist
 
   // Trigger options
@@ -34,7 +34,7 @@ const CONFIG = {
   triggerHour: 4,                    // If 'daily', the hour of day to run (0–23)
 
   // Script identification
-  scriptKey: 'CREATED_BY_Auto-Birthdays', // Unique identifier for events created by this script; customize if desired
+  scriptKey: 'Auto-Birthdays',       // Unique identifier for events created by this script; customize if desired
 
   // Contact label filtering (optional)
   useLabels: false,                  // Enable filtering contacts by labels
@@ -137,11 +137,14 @@ function loopThroughContacts() {
     return;
   }
 
-  if (CONFIG.cleanupEvents) {
-    Logger.log("🧹 Starting cleanup of old birthday events...");
+  // Run monthly cleanup on the 1st of each month
+  const today = new Date();
+  const isFirstOfMonth = today.getDate() === 1;
+  
+  if (CONFIG.monthlyCleanup && isFirstOfMonth) {
+    Logger.log("📅 It's the 1st of the month - running monthly cleanup...");
     cleanupOldBirthdayEvents(calendar, connections);
-    Logger.log("🎉 Cleanup completed! Script will now exit without recreating events.");
-    return;
+    Logger.log("🧹 Monthly cleanup completed! Now recreating events...");
   }
 
   Logger.log("📊 Starting birthday event processing...");
