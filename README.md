@@ -42,20 +42,22 @@ const CONFIG = {
   
   // Language and localization
   language: 'en',                    // Language code: 'en' (English), 'it' (Italian), etc.
-  titleFormat: '{emoji}{name} ({ageOrYear})', // Title format template (see below for placeholders)
+  titleFormat: '',                   // Custom title format (empty = use language default)
 
   // Recurrence
   useRecurrence: true,               // Create recurring yearly events
-  futureYears: 20,                   // Recurring events end this many years in the future
-  pastYears: 2,                      // Recurring events start this many years in the past
+  futureYears: 10,                   // Recurring events end this many years in the future
+  pastYears: 1,                      // Recurring events start this many years in the past
 
   // Reminder settings
   useReminders: true,                // Enable/disable popup reminders for birthday events
-  reminderMinutesBefore: 1440,       // Popup reminder time (in minutes) - only used if useReminders is true
-                                     // Common values: 0 = at event time, 60 = 1 hour before, 1440 = 1 day before, 10080 = 1 week before
+  reminderMinutesBefore: 1440,       // Popup reminder time (in minutes)
+                                     // Common values: 0 = at event, 60 = 1hr, 1440 = 1 day, 10080 = 1 week
 
   // Cleanup
-  cleanupEvents: false,               // ⚠️⚠️⚠️ Deletes all matching birthday events between ±100 years
+  firstRunCleanup: false,            // ⚠️ ONE-TIME: Set true to remove old "xxx's Birthday" events
+  monthlyCleanup: true,              // Run full cleanup on the 1st of each month (deletes & recreates)
+  cleanupOrphans: true,              // Delete birthday events for contacts that no longer exist
 
   // Trigger options
   useTrigger: true,                  // Automatically run on a schedule
@@ -63,15 +65,15 @@ const CONFIG = {
   triggerHour: 4,                    // If 'daily', the hour of day to run (0–23)
 
   // Script identification
-  scriptKey: 'CREATED_BY_Auto-Birthdays', // Unique identifier for events created by this script
+  scriptKey: 'Auto-Birthdays',       // Unique identifier for events created by this script
 
   // Contact label filtering (optional)
   useLabels: false,                  // Enable filtering contacts by labels
-  contactLabels: [],                 // Array of contact label IDs to include (e.g. ['abc123'])
+  contactLabels: [],                 // Array of contact label IDs to include
 
   // Month filtering (optional)
   useMonthFilter: false,             // Enable filtering contacts by birth month
-  filterMonths: []                   // Array of months to include (1-12), e.g. [1, 2, 4] for Jan, Feb, Apr
+  filterMonths: []                   // Array of months to include (1-12)
 };
 ```
 
@@ -168,10 +170,16 @@ You can customize the event title format using these placeholders:
 **English Configuration:**
 ```javascript
 language: 'en',
-titleFormat: '{emoji}{name} ({ageOrYear})'        // 🎂 John Doe (36)
+titleFormat: ''                                        // 🎂 John Doe's Birthday (36) - default
+// or
+titleFormat: '{emoji}{name} ({ageOrYear})'             // 🎂 John Doe (36)
 // or
 titleFormat: '{emoji}{name}\'s birthday - {age} years'  // 🎂 John Doe's birthday - 36 years
 ```
+
+**Note:** If the contact doesn't have a birth year specified, age/year is automatically hidden:
+- With year: 🎂 John Doe's Birthday (36)
+- Without year: 🎂 John Doe's Birthday
 
 **Italian Configuration:**
 ```javascript
@@ -271,16 +279,47 @@ titleFormat: '{emoji}{name} compie {ageText}'
 
 ---
 
-## 🧹 Automatic Cleanup
+## 🧹 Cleanup Options
 
-If `CONFIG.cleanupEvents` is enabled:
+The script provides three cleanup mechanisms:
 
-- Search your calendar between 100 years in the past and future
-- Find outdated or duplicate birthday events **created by this script only**
-- Delete them safely, including recurring series
-- Manual birthday events are never touched
+### First Run Cleanup (`firstRunCleanup`)
 
-**Safety Note**: The cleanup only affects events containing the script's unique identifier, ensuring your manually created events remain safe.
+A **one-time** cleanup to remove legacy birthday events created before using this script:
+
+1. Set `firstRunCleanup: true`
+2. Run the script once
+3. Set `firstRunCleanup: false`
+
+**Patterns removed:**
+- "John's Birthday", "John's Bday"
+- "Birthday of John", "Birthday - John"
+- Localized versions (Italian, French, German, Spanish)
+
+**Note:** Only removes events **not** created by this script.
+
+### Monthly Cleanup (`monthlyCleanup`)
+
+Automatically runs on the **1st of each month**:
+
+- Deletes all script-created birthday events
+- Immediately recreates them with current contact data
+- Handles birthday date changes and deleted birthdays
+- Runs during normal scheduled execution
+
+### Orphan Cleanup (`cleanupOrphans`)
+
+Runs on **every execution**:
+
+- Finds birthday events for contacts that no longer exist
+- Deletes only script-created orphaned events
+- Safe for your manual events
+
+| Setting | When it runs | What it does |
+|---------|--------------|---------------|
+| `firstRunCleanup` | Once (manual) | Removes legacy "xxx's Birthday" events |
+| `monthlyCleanup` | 1st of month | Full delete & recreate of all events |
+| `cleanupOrphans` | Every run | Removes events for deleted contacts |
 
 ---
 
@@ -321,9 +360,9 @@ The script uses a unique key system to identify events it has created:
 
 You'll see all-day birthday events appear in your calendar like these:
 
-- 🎂 John Doe (*1988)
-- 🎂 Jane Smith (36)
-- John Appleseed (no year provided)
+- 🎂 John Doe's Birthday (*1988)
+- 🎂 Jane Smith's Birthday (36)
+- 🎂 John Appleseed's Birthday *(no year provided, so no age shown)*
 
 All events appear as **all-day events** on the person’s birthday.
 

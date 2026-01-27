@@ -25,6 +25,7 @@ const CONFIG = {
                                      // Common values: 0 = at event time, 60 = 1 hour before, 1440 = 1 day before, 10080 = 1 week before
 
   // Cleanup
+  firstRunCleanup: false,            // ⚠️ ONE-TIME: Set true to remove old "xxx's Birthday" events, then set back to false
   monthlyCleanup: true,              // Run full cleanup on the 1st of each month (deletes & recreates all events)
   cleanupOrphans: true,              // Automatically delete birthday events for contacts that no longer exist
 
@@ -51,7 +52,7 @@ const CONFIG = {
 const LANGUAGE_CONFIG = {
   en: {
     titleFormats: {
-      'default': '{emoji}{name} ({ageOrYear})'
+      'default': "{emoji}{name}'s Birthday ({ageOrYear})"
     },
     terms: {
       'age': 'age',
@@ -134,6 +135,15 @@ function loopThroughContacts() {
 
   if (!calendar) {
     Logger.log("⚠️ Calendar not found.");
+    return;
+  }
+
+  // First-run cleanup: remove legacy "xxx's Birthday" events
+  if (CONFIG.firstRunCleanup) {
+    Logger.log("🧹 Running first-time cleanup of legacy birthday events...");
+    cleanupLegacyBirthdayEvents(calendar);
+    Logger.log("🎉 First-run cleanup completed!");
+    Logger.log("⚠️ Remember to set firstRunCleanup back to false!");
     return;
   }
 
@@ -288,16 +298,18 @@ function generateLocalizedTitle(contactName, age, birthYear, showYear, isRecurri
   let ageOrYear = '';
   let ageText = '';
   
+  // Only show age/year if birth year is known
   if (birthYear && CONFIG.showYearOrAge) {
     if (showYear) {
-      ageOrYear = `${birthYear}`;
-      ageText = `${birthYear}`;
+      ageOrYear = `*${birthYear}`;
+      ageText = `*${birthYear}`;
     } else if (age !== null) {
       const yearWord = age === 1 ? langConfig.terms.year : langConfig.terms.years;
       ageOrYear = age.toString();
       ageText = `${age} ${yearWord}`;
     }
   }
+  // If no birth year, age/ageOrYear/ageText remain empty - nothing will be shown
   
   // Replace placeholders in the format template
   let title = formatTemplate
@@ -966,4 +978,72 @@ function removeTriggerIfExists() {
       Logger.log("🗑️ Removed existing trigger");
     }
   }
+}
+
+/**
+ * One-time cleanup of legacy birthday events (e.g., "John's Birthday")
+ * that were manually created before using this script.
+ * Searches for events matching common birthday patterns.
+ */
+function cleanupLegacyBirthdayEvents(calendar) {
+  const currentYear = new Date().getFullYear();
+  const startDate = new Date(currentYear - 10, 0, 1);
+  const endDate = new Date(currentYear + 10, 11, 31);
+  const allEvents = calendar.getEvents(startDate, endDate);
+  
+  Logger.log(`🔍 Scanning ${allEvents.length} events for legacy birthday patterns...`);
+  
+  // Patterns to match legacy birthday events
+  // Matches: "John's Birthday", "John's birthday", "Birthday - John", etc.
+  const birthdayPatterns = [
+    /'s birthday/i,           // "John's Birthday"
+    /'s bday/i,               // "John's Bday"
+    /birthday of /i,          // "Birthday of John"
+    /^birthday -/i,           // "Birthday - John"
+    /^birthday:/i,            // "Birthday: John"
+    /compleanno di /i,        // Italian: "Compleanno di John"
+    /anniversaire de /i,      // French: "Anniversaire de John"
+    /geburtstag von /i,       // German: "Geburtstag von John"
+    /cumpleaños de /i         // Spanish: "Cumpleaños de John"
+  ];
+  
+  const deletedSeriesIds = new Set();
+  let legacyEventsDeleted = 0;
+  let seriesDeleted = 0;
+  
+  for (const event of allEvents) {
+    // Skip events created by this script
+    if (isEventCreatedByScript(event)) continue;
+    
+    const title = event.getTitle();
+    
+    // Check if title matches any birthday pattern
+    const isLegacyBirthday = birthdayPatterns.some(pattern => pattern.test(title));
+    
+    if (!isLegacyBirthday) continue;
+    
+    try {
+      if (event.isRecurringEvent && event.isRecurringEvent()) {
+        const series = event.getEventSeries();
+        const seriesId = series.getId();
+        if (!deletedSeriesIds.has(seriesId)) {
+          deletedSeriesIds.add(seriesId);
+          series.deleteEventSeries();
+          seriesDeleted++;
+          Logger.log(`🗑️ Deleted legacy recurring series: ${title}`);
+        }
+      } else {
+        event.deleteEvent();
+        legacyEventsDeleted++;
+        Logger.log(`🗑️ Deleted legacy event: ${title} [${event.getStartTime().toDateString()}]`);
+      }
+    } catch (e) {
+      Logger.log(`❌ Failed to delete: ${title} - ${e}`);
+    }
+  }
+  
+  Logger.log("📊 LEGACY CLEANUP SUMMARY:");
+  Logger.log(`📅 Single events deleted: ${legacyEventsDeleted}`);
+  Logger.log(`🔄 Recurring series deleted: ${seriesDeleted}`);
+  Logger.log(`✅ Total deletions: ${legacyEventsDeleted + seriesDeleted}`);
 }
