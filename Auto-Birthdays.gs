@@ -270,6 +270,13 @@ function loopThroughContacts() {
   Logger.log("🎉 Processing completed successfully!");
 }
 
+function matchesContactName(title, contactName) {
+  if (!title || !contactName) return false;
+  const escapedName = contactName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`\\b${escapedName}\\b`, 'i');
+  return regex.test(title);
+}
+
 /** Generate localized title based on configured language and formatting options */
 function generateLocalizedTitle(contactName, age, birthYear, showYear, isRecurring) {
   const langConfig = LANGUAGE_CONFIG[CONFIG.language] || LANGUAGE_CONFIG['en'];
@@ -280,16 +287,21 @@ function generateLocalizedTitle(contactName, age, birthYear, showYear, isRecurri
   const emoji = (usingCustomFormat || CONFIG.useEmoji) ? '🎂 ' : '';
   let ageOrYear = '';
   let ageText = '';
+  let effectiveAge = age;
+
+  if (isRecurring && showYear) {
+    effectiveAge = null;
+  }
   
   // Determine age or year display
   if (birthYear) {
     if (showYear) {
       ageOrYear = `*${birthYear}`;
       ageText = `*${birthYear}`;
-    } else if (age !== null) {
-      const yearWord = age === 1 ? langConfig.terms.year : langConfig.terms.years;
-      ageOrYear = age.toString();
-      ageText = `${age} ${yearWord}`;
+    } else if (effectiveAge !== null) {
+      const yearWord = effectiveAge === 1 ? langConfig.terms.year : langConfig.terms.years;
+      ageOrYear = effectiveAge.toString();
+      ageText = `${effectiveAge} ${yearWord}`;
     }
   }
   
@@ -298,11 +310,11 @@ function generateLocalizedTitle(contactName, age, birthYear, showYear, isRecurri
     .replace(/{emoji}/g, emoji)
     .replace(/{name}/g, contactName)
     .replace(/{ageOrYear}/g, ageOrYear)
-    .replace(/{age}/g, age !== null ? age.toString() : '')
+    .replace(/{age}/g, effectiveAge !== null ? effectiveAge.toString() : '')
     .replace(/{ageText}/g, ageText)
     .replace(/{birthYear}/g, birthYear ? birthYear.toString() : '')
-    .replace(/{years}/g, age === 1 ? langConfig.terms.year : (age !== null ? langConfig.terms.years : ''))
-    .replace(/{year}/g, age === 1 ? langConfig.terms.year : '')
+    .replace(/{years}/g, effectiveAge === 1 ? langConfig.terms.year : (effectiveAge !== null ? langConfig.terms.years : ''))
+    .replace(/{year}/g, effectiveAge === 1 ? langConfig.terms.year : '')
     .replace(/{birthday}/g, langConfig.terms.birthday);
   
   // Clean up trailing characters and extra spaces
@@ -329,7 +341,10 @@ function buildBirthdayIndex(events) {
     if (!ev.isAllDayEvent()) continue;
     const d = ev.getStartTime();
     const key = `${ev.getTitle()}|${d.getMonth()}|${d.getDate()}|${d.getFullYear()}`;
-    map.set(key, ev);
+    if (!map.has(key)) {
+      map.set(key, []);
+    }
+    map.get(key).push(ev);
   }
   return map;
 }
@@ -354,13 +369,20 @@ function hasRequiredLabel(person, labelIds) {
 function getAllContacts() {
   const connections = [];
   let nextPageToken;
+  
   do {
+    // Define the base options without the pageToken
     const reqOpts = {
       personFields: 'names,birthdays,memberships',
       sortOrder: 'LAST_NAME_ASCENDING',
-      pageSize: 100,
-      pageToken: nextPageToken
+      pageSize: 100
     };
+    
+    // Safely append the pageToken only if it is defined
+    if (nextPageToken) {
+      reqOpts.pageToken = nextPageToken;
+    }
+    
     const response = People.People.Connections.list('people/me', reqOpts);
     connections.push(...(response.connections || []));
     nextPageToken = response.nextPageToken;
@@ -397,20 +419,22 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
   // Generate expected title and description
   const age = birthdayDate.year ? currentYear - birthdayDate.year : null;
   const showYear = CONFIG.useRecurrence && !CONFIG.showAgeOnRecurring;
-  const expectedTitle = generateLocalizedTitle(contactName, age, birthdayDate.year, showYear, CONFIG.useRecurrence);
+  const usingIndividualEvents = CONFIG.useRecurrence && CONFIG.showAgeOnRecurring && birthdayDate.year;
+  const expectedTitle = generateLocalizedTitle(contactName, age, birthdayDate.year, showYear, CONFIG.useRecurrence && !usingIndividualEvents);
   const expectedDescription = generateLocalizedDescription(contactName);
 
   // Quick lookup check for exact existing event
-  const usingIndividualEvents = CONFIG.useRecurrence && CONFIG.showAgeOnRecurring && birthdayDate.year;
   const key = `${expectedTitle}|${month}|${day}|${currentYear}`;
-  const existingQuick = eventIndex.get(key);
+  const existingEvents = eventIndex.get(key) || [];
+  const existingQuick = existingEvents.find(ev => 
+    ev.isAllDayEvent() &&
+    isEventCreatedByScript(ev) &&
+    (CONFIG.useRecurrence === (ev.isRecurringEvent && ev.isRecurringEvent())) &&
+    (ev.getDescription() || '') === expectedDescription &&
+    hasCorrectReminders(ev)
+  );
   
-  if (!usingIndividualEvents && existingQuick &&
-      existingQuick.isAllDayEvent() &&
-      isEventCreatedByScript(existingQuick) &&
-      (CONFIG.useRecurrence === (existingQuick.isRecurringEvent && existingQuick.isRecurringEvent())) &&
-      (existingQuick.getDescription() || '') === expectedDescription &&
-      hasCorrectReminders(existingQuick)) {
+  if (!usingIndividualEvents && existingQuick) {
     return 'skipped_existing';
   }
 
@@ -433,10 +457,14 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       eventExpectedTitle = generateLocalizedTitle(contactName, eventAge, birthdayDate.year, false, false);
     }
     
+    let eventIsRecurring = false;
+    try {
+      eventIsRecurring = event.isRecurringEvent && event.isRecurringEvent();
+    } catch (e) {}
+
     const isTitleOutdated = title !== eventExpectedTitle;
     const isDescriptionOutdated = description !== expectedDescription;
     const isNotAllDay = !event.isAllDayEvent();
-    const eventIsRecurring = event.isRecurringEvent && event.isRecurringEvent();
     const isRecurrenceMismatch = usingIndividualEvents ? eventIsRecurring : CONFIG.useRecurrence !== eventIsRecurring;
     const isNotFromScript = !isEventCreatedByScript(event);
     const hasIncorrectReminders = !hasCorrectReminders(event);
@@ -445,13 +473,19 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
     if (isTitleOutdated || isDescriptionOutdated || isNotAllDay || isRecurrenceMismatch || isNotFromScript || hasIncorrectReminders || needsConversionToIndividual) {
       eventsWereDeleted = true;
       try {
-        if (event.isRecurringEvent && event.isRecurringEvent()) {
-          const series = event.getEventSeries();
-          const seriesId = series.getId();
-          if (!deletedSeriesIds.has(seriesId)) {
-            deletedSeriesIds.add(seriesId);
-            series.deleteEventSeries();
-            Logger.log(`🗑️ Deleted outdated recurring series: ${title}`);
+        if (eventIsRecurring) {
+          try {
+            const series = event.getEventSeries();
+            if (series) {
+              const seriesId = series.getId();
+              if (!deletedSeriesIds.has(seriesId)) {
+                deletedSeriesIds.add(seriesId);
+                series.deleteEventSeries();
+                Logger.log(`🗑️ Deleted outdated recurring series: ${title}`);
+              }
+            }
+          } catch (e) {
+            Logger.log(`❌ Error deleting recurring series: ${title} → ${e}`);
           }
         } else {
           event.deleteEvent();
@@ -476,8 +510,13 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       const yearAge = year - birthdayDate.year;
       const yearTitle = generateLocalizedTitle(contactName, yearAge, birthdayDate.year, false, false);
       const yearKey = `${yearTitle}|${month}|${day}|${year}`;
-      const yearEvent = eventIndex.get(yearKey);
-      if (!yearEvent || !isEventCreatedByScript(yearEvent) || (yearEvent.getDescription() || '') !== expectedDescription || !hasCorrectReminders(yearEvent)) {
+      const yearEvents = eventIndex.get(yearKey) || [];
+      const yearEvent = yearEvents.find(ev => 
+        isEventCreatedByScript(ev) && 
+        (ev.getDescription() || '') === expectedDescription && 
+        hasCorrectReminders(ev)
+      );
+      if (!yearEvent) {
         allYearsExist = false;
         break;
       }
@@ -494,8 +533,13 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       const yearTitle = generateLocalizedTitle(contactName, yearAge, birthdayDate.year, false, false);
       
       const yearKey = `${yearTitle}|${month}|${day}|${year}`;
-      const existingYearEvent = eventIndex.get(yearKey);
-      if (existingYearEvent && isEventCreatedByScript(existingYearEvent) && (existingYearEvent.getDescription() || '') === expectedDescription && hasCorrectReminders(existingYearEvent)) {
+      const existingYearEvents = eventIndex.get(yearKey) || [];
+      const existingYearEvent = existingYearEvents.find(ev => 
+        isEventCreatedByScript(ev) && 
+        (ev.getDescription() || '') === expectedDescription && 
+        hasCorrectReminders(ev)
+      );
+      if (existingYearEvent) {
         continue;
       }
       
@@ -571,19 +615,8 @@ function findBirthdayEvents(allEvents, contactName, month, day) {
   return allEvents.filter(ev => {
     const title = ev.getTitle();
     const d = ev.getStartTime();
-    return ev.isAllDayEvent() && (title.includes(contactName) && (d.getMonth() === month && d.getDate() === day));
+    return ev.isAllDayEvent() && matchesContactName(title, contactName) && (d.getMonth() === month && d.getDate() === day);
   });
-}
-
-/** Calculate the next birthday date for a contact */
-function calculateNextBirthday(birthdayDate) {
-  const day = birthdayDate.day;
-  const month = birthdayDate.month - 1;
-  const today = new Date();
-  let year = today.getFullYear();
-  const birthdayThisYear = new Date(year, month, day);
-  if (today >= birthdayThisYear) year++;
-  return new Date(year, month, day);
 }
 
 /** Clean up events for contacts that no longer exist in Google Contacts */
@@ -603,7 +636,7 @@ function cleanupOrphanedEvents(calendar, allEvents, allContacts) {
     
     let hasMatchingContact = false;
     for (const name of contactNames) {
-      if (title.includes(name)) {
+      if (matchesContactName(title, name)) {
         hasMatchingContact = true;
         break;
       }
@@ -611,15 +644,24 @@ function cleanupOrphanedEvents(calendar, allEvents, allContacts) {
 
     if (!hasMatchingContact) {
       try {
-        if (event.isRecurringEvent && event.isRecurringEvent()) {
-          const series = event.getEventSeries();
-          const seriesId = series.getId();
-          if (!deletedSeriesIds.has(seriesId)) {
-            deletedSeriesIds.add(seriesId);
-            series.deleteEventSeries();
-            orphansDeleted++;
-            Logger.log(`🧹 Deleted orphaned recurring series: ${title}`);
-          }
+        let isRecurring = false;
+        try {
+          isRecurring = event.isRecurringEvent && event.isRecurringEvent();
+        } catch (e) {}
+
+        if (isRecurring) {
+          try {
+            const series = event.getEventSeries();
+            if (series) {
+              const seriesId = series.getId();
+              if (!deletedSeriesIds.has(seriesId)) {
+                deletedSeriesIds.add(seriesId);
+                series.deleteEventSeries();
+                orphansDeleted++;
+                Logger.log(`🧹 Deleted orphaned recurring series: ${title}`);
+              }
+            }
+          } catch (e) {}
         } else {
           event.deleteEvent();
           orphansDeleted++;
@@ -633,11 +675,11 @@ function cleanupOrphanedEvents(calendar, allEvents, allContacts) {
   return orphansDeleted;
 }
 
-/** Perform deep cleanup of all birthday events across 200-year window */
+/** Perform deep cleanup of all birthday events across configured window */
 function cleanupOldBirthdayEvents(calendar, allContacts) {
   const currentYear = new Date().getFullYear();
-  const startDate = new Date(currentYear - 100, 0, 1);
-  const endDate = new Date(currentYear + 100, 11, 31);
+  const startDate = new Date(currentYear - CONFIG.pastYears - 1, 0, 1);
+  const endDate = new Date(currentYear + CONFIG.futureYears + 1, 11, 31);
   const allEvents = calendar.getEvents(startDate, endDate);
   
   Logger.log(`🧹 Cleanup started between: ${startDate.toDateString()} - ${endDate.toDateString()}`);
@@ -665,29 +707,38 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
     const isFromScript = isEventCreatedByScript(event);
 
     for (const contact of contactBirthdays) {
-      const isNameMatch = title.includes(contact.name);
+      const isNameMatch = matchesContactName(title, contact.name);
       const isBirthdayDateMatch = start.getDate() === contact.day && start.getMonth() === contact.month;
       const shouldDelete = isFromScript && ((startsWithCakeEmoji && isNameMatch) || (isAllDay && isNameMatch && isBirthdayDateMatch));
 
       if (!shouldDelete) continue;
 
-      if (event.isRecurringEvent && event.isRecurringEvent()) {
+      let isRecurring = false;
+      try {
+        isRecurring = event.isRecurringEvent && event.isRecurringEvent();
+      } catch (e) {}
+
+      if (isRecurring) {
         try {
           const series = event.getEventSeries();
-          const seriesId = series.getId();
-          if (deletedSeriesIds.has(seriesId)) break;
-          deletedSeriesIds.add(seriesId);
-          eventsToDelete.push({ event: series, isSeries: true });
-          break;
-        } catch (e) {
-          Utilities.sleep(5000);
-          try {
-            const series = event.getEventSeries();
+          if (series) {
             const seriesId = series.getId();
             if (deletedSeriesIds.has(seriesId)) break;
             deletedSeriesIds.add(seriesId);
             eventsToDelete.push({ event: series, isSeries: true });
             break;
+          }
+        } catch (e) {
+          Utilities.sleep(5000);
+          try {
+            const series = event.getEventSeries();
+            if (series) {
+              const seriesId = series.getId();
+              if (deletedSeriesIds.has(seriesId)) break;
+              deletedSeriesIds.add(seriesId);
+              eventsToDelete.push({ event: series, isSeries: true });
+              break;
+            }
           } catch (err) {}
         }
       } else {
@@ -762,8 +813,8 @@ function removeTriggerIfExists() {
 /** Clean up legacy non-script birthday events matching common patterns */
 function cleanupLegacyBirthdayEvents(calendar) {
   const currentYear = new Date().getFullYear();
-  const startDate = new Date(currentYear - 10, 0, 1);
-  const endDate = new Date(currentYear + 10, 11, 31);
+  const startDate = new Date(currentYear - CONFIG.pastYears - 1, 0, 1);
+  const endDate = new Date(currentYear + CONFIG.futureYears + 1, 11, 31);
   const allEvents = calendar.getEvents(startDate, endDate);
   
   const birthdayPatterns = [
@@ -778,12 +829,19 @@ function cleanupLegacyBirthdayEvents(calendar) {
     if (!birthdayPatterns.some(pattern => pattern.test(title))) continue;
     
     try {
-      if (event.isRecurringEvent && event.isRecurringEvent()) {
+      let isRecurring = false;
+      try {
+        isRecurring = event.isRecurringEvent && event.isRecurringEvent();
+      } catch (e) {}
+
+      if (isRecurring) {
         const series = event.getEventSeries();
-        const seriesId = series.getId();
-        if (!deletedSeriesIds.has(seriesId)) {
-          deletedSeriesIds.add(seriesId);
-          series.deleteEventSeries();
+        if (series) {
+          const seriesId = series.getId();
+          if (!deletedSeriesIds.has(seriesId)) {
+            deletedSeriesIds.add(seriesId);
+            series.deleteEventSeries();
+          }
         }
       } else {
         event.deleteEvent();
@@ -795,20 +853,27 @@ function cleanupLegacyBirthdayEvents(calendar) {
 /** Delete all events created by this script */
 function cleanupAllScriptEvents(calendar) {
   const currentYear = new Date().getFullYear();
-  const startDate = new Date(currentYear - 100, 0, 1);
-  const endDate = new Date(currentYear + 100, 11, 31);
+  const startDate = new Date(currentYear - CONFIG.pastYears - 1, 0, 1);
+  const endDate = new Date(currentYear + CONFIG.futureYears + 1, 11, 31);
   const allEvents = calendar.getEvents(startDate, endDate);
   const deletedSeriesIds = new Set();
   
   for (const event of allEvents) {
     if (!isEventCreatedByScript(event)) continue;
     try {
-      if (event.isRecurringEvent && event.isRecurringEvent()) {
+      let isRecurring = false;
+      try {
+        isRecurring = event.isRecurringEvent && event.isRecurringEvent();
+      } catch (e) {}
+
+      if (isRecurring) {
         const series = event.getEventSeries();
-        const seriesId = series.getId();
-        if (!deletedSeriesIds.has(seriesId)) {
-          deletedSeriesIds.add(seriesId);
-          series.deleteEventSeries();
+        if (series) {
+          const seriesId = series.getId();
+          if (!deletedSeriesIds.has(seriesId)) {
+            deletedSeriesIds.add(seriesId);
+            series.deleteEventSeries();
+          }
         }
       } else {
         event.deleteEvent();
